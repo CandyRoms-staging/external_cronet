@@ -50,7 +50,7 @@ class QuicSession;
 class QuicStream;
 
 // Buffers frames for a stream until the first byte of that frame arrives.
-class QUIC_EXPORT_PRIVATE PendingStream
+class QUICHE_EXPORT PendingStream
     : public QuicStreamSequencer::StreamInterface {
  public:
   PendingStream(QuicStreamId id, QuicSession* session);
@@ -135,8 +135,7 @@ class QUIC_EXPORT_PRIVATE PendingStream
   absl::optional<QuicResetStreamError> stop_sending_error_code_;
 };
 
-class QUIC_EXPORT_PRIVATE QuicStream
-    : public QuicStreamSequencer::StreamInterface {
+class QUICHE_EXPORT QuicStream : public QuicStreamSequencer::StreamInterface {
  public:
   // Creates a new stream with stream_id |id| associated with |session|. If
   // |is_static| is true, then the stream will be given precedence
@@ -214,9 +213,6 @@ class QUIC_EXPORT_PRIVATE QuicStream
   // is no longer interested in data being acked (which happens when
   // a stream is reset because of an error).
   bool IsWaitingForAcks() const;
-
-  // Number of bytes available to read.
-  QuicByteCount ReadableBytes() const;
 
   QuicRstStreamErrorCode stream_error() const {
     return stream_error_.internal_code();
@@ -440,13 +436,16 @@ class QUIC_EXPORT_PRIVATE QuicStream
   // Send RESET_STREAM if it hasn't been sent yet.
   void MaybeSendRstStream(QuicResetStreamError error);
 
-  // Convenience warppers for two methods above.
+  // Convenience wrappers for two methods above.
   void MaybeSendRstStream(QuicRstStreamErrorCode error) {
     MaybeSendRstStream(QuicResetStreamError::FromInternal(error));
   }
   void MaybeSendStopSending(QuicRstStreamErrorCode error) {
     MaybeSendStopSending(QuicResetStreamError::FromInternal(error));
   }
+
+  // Close the read side of the stream.  May cause the stream to be closed.
+  virtual void CloseReadSide();
 
   // Close the write side of the socket.  Further writes will fail.
   // Can be called by the subclass or internally.
@@ -497,9 +496,6 @@ class QUIC_EXPORT_PRIVATE QuicStream
 
   // Write buffered data (in send buffer) at |level|.
   void WriteBufferedData(EncryptionLevel level);
-
-  // Close the read side of the stream.  May cause the stream to be closed.
-  void CloseReadSide();
 
   // Called when bytes are sent to the peer.
   void AddBytesSent(QuicByteCount bytes);

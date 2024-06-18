@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "base/logging.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
 #include "base/strings/escape.h"
 #include "base/strings/strcat.h"
@@ -63,6 +64,7 @@ const char HttpRequestHeaders::kIfRange[] = "If-Range";
 const char HttpRequestHeaders::kIfUnmodifiedSince[] = "If-Unmodified-Since";
 const char HttpRequestHeaders::kOrigin[] = "Origin";
 const char HttpRequestHeaders::kPragma[] = "Pragma";
+const char HttpRequestHeaders::kPriority[] = "Priority";
 const char HttpRequestHeaders::kProxyAuthorization[] = "Proxy-Authorization";
 const char HttpRequestHeaders::kProxyConnection[] = "Proxy-Connection";
 const char HttpRequestHeaders::kRange[] = "Range";
@@ -243,7 +245,8 @@ void HttpRequestHeaders::SetAcceptEncodingIfMissing(
     const GURL& url,
     const absl::optional<base::flat_set<SourceStream::SourceType>>&
         accepted_stream_types,
-    bool enable_brotli) {
+    bool enable_brotli,
+    bool enable_zstd) {
   if (HasHeader(kAcceptEncoding))
     return;
 
@@ -267,13 +270,23 @@ void HttpRequestHeaders::SetAcceptEncodingIfMissing(
                          SourceStream::SourceType::TYPE_DEFLATE)) {
     advertised_encoding_names.push_back("deflate");
   }
+
+  const bool can_use_advanced_encodings =
+      (url.SchemeIsCryptographic() || IsLocalhost(url));
+
   // Advertise "br" encoding only if transferred data is opaque to proxy.
   if (enable_brotli &&
       SupportsStreamType(accepted_stream_types,
-                         SourceStream::SourceType::TYPE_BROTLI)) {
-    if (url.SchemeIsCryptographic() || IsLocalhost(url)) {
-      advertised_encoding_names.push_back("br");
-    }
+                         SourceStream::SourceType::TYPE_BROTLI) &&
+      can_use_advanced_encodings) {
+    advertised_encoding_names.push_back("br");
+  }
+  // Advertise "zstd" encoding only if transferred data is opaque to proxy.
+  if (enable_zstd &&
+      SupportsStreamType(accepted_stream_types,
+                         SourceStream::SourceType::TYPE_ZSTD) &&
+      can_use_advanced_encodings) {
+    advertised_encoding_names.push_back("zstd");
   }
   if (!advertised_encoding_names.empty()) {
     // Tell the server what compression formats are supported.

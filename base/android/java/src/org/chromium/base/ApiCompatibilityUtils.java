@@ -27,20 +27,12 @@ import android.provider.MediaStore;
 import android.provider.Settings;
 import android.view.Display;
 import android.view.View;
-import android.view.Window;
-import android.view.WindowManager;
 import android.view.textclassifier.TextClassifier;
 import android.widget.TextView;
-
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
-import androidx.annotation.OptIn;
 import androidx.annotation.RequiresApi;
-
-import com.android.modules.utils.build.SdkLevel;
-
 import java.io.IOException;
-import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
@@ -175,31 +167,6 @@ public class ApiCompatibilityUtils {
     }
 
     /**
-     * @see android.view.Window#setStatusBarColor(int color).
-     */
-    public static void setStatusBarColor(Window window, int statusBarColor) {
-        window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
-        window.setStatusBarColor(statusBarColor);
-    }
-
-    /**
-     * Sets the status bar icons to dark or light. Note that this is only valid for
-     * Android M+.
-     *
-     * @param rootView The root view used to request updates to the system UI theming.
-     * @param useDarkIcons Whether the status bar icons should be dark.
-     */
-    public static void setStatusBarIconColor(View rootView, boolean useDarkIcons) {
-        int systemUiVisibility = rootView.getSystemUiVisibility();
-        if (useDarkIcons) {
-            systemUiVisibility |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
-        } else {
-            systemUiVisibility &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
-        }
-        rootView.setSystemUiVisibility(systemUiVisibility);
-    }
-
-    /**
      * @see android.content.res.Resources#getDrawable(int id).
      * TODO(ltian): use {@link AppCompatResources} to parse drawable to prevent fail on
      * {@link VectorDrawable}. (http://crbug.com/792129)
@@ -321,22 +288,9 @@ public class ApiCompatibilityUtils {
      */
     public static void setActivityOptionsBackgroundActivityStartMode(
             @NonNull ActivityOptions options) {
-        if (!SdkLevel.isAtLeastU()) return;
-
-        // options.setPendingIntentBackgroundActivityStartMode(
-        //     ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED);
-        // TODO(crbug.com/1423489): Replace the reflection with the normal API.
-        try {
-            Method method = ActivityOptions.class.getMethod(
-                    "setPendingIntentBackgroundActivityStartMode", int.class);
-            Field field = ActivityOptions.class.getField("MODE_BACKGROUND_ACTIVITY_START_ALLOWED");
-            int mode = field.getInt(null);
-            method.invoke(options, mode);
-        } catch (IllegalAccessException | InvocationTargetException | NoSuchFieldException
-                | NoSuchMethodException e) {
-            Log.e(TAG, "Reflection failure: " + e);
-            assert false : "PendingIntent from background activity may fail to run.";
-        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return;
+        options.setPendingIntentBackgroundActivityStartMode(
+                ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED);
     }
 
     /**
@@ -347,7 +301,7 @@ public class ApiCompatibilityUtils {
     public static void clearHandwritingBoundsOffsetBottom(View view) {
         // TODO(crbug.com/1427112): Replace uses of this method with direct calls once the API is
         // available.
-        if (!SdkLevel.isAtLeastU()) return;
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return;
         // Set the bottom handwriting bounds offset to 0 so that the view doesn't intercept
         // stylus events meant for the web contents.
         try {

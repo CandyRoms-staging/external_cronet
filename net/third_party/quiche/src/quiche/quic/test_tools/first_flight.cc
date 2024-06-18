@@ -8,7 +8,6 @@
 #include <vector>
 
 #include "quiche/quic/core/crypto/quic_crypto_client_config.h"
-#include "quiche/quic/core/http/quic_client_push_promise_index.h"
 #include "quiche/quic/core/http/quic_spdy_client_session.h"
 #include "quiche/quic/core/quic_config.h"
 #include "quiche/quic/core/quic_connection.h"
@@ -67,7 +66,7 @@ class FirstFlightExtractor : public DelegatedPacketWriter::Delegate {
     session_ = std::make_unique<QuicSpdyClientSession>(
         config_, ParsedQuicVersionVector{version_},
         connection_,  // session_ takes ownership of connection_ here.
-        TestServerId(), crypto_config_.get(), &push_promise_index_);
+        TestServerId(), crypto_config_.get());
     session_->Initialize();
     session_->CryptoConnect();
   }
@@ -75,11 +74,14 @@ class FirstFlightExtractor : public DelegatedPacketWriter::Delegate {
   void OnDelegatedPacket(const char* buffer, size_t buf_len,
                          const QuicIpAddress& /*self_client_address*/,
                          const QuicSocketAddress& /*peer_client_address*/,
-                         PerPacketOptions* /*options*/) override {
+                         PerPacketOptions* /*options*/,
+                         const QuicPacketWriterParams& params) override {
     packets_.emplace_back(
         QuicReceivedPacket(buffer, buf_len,
                            connection_helper_.GetClock()->ApproximateNow(),
-                           /*owns_buffer=*/false)
+                           /*owns_buffer=*/false, /*ttl=*/0, /*ttl_valid=*/true,
+                           /*packet_headers=*/nullptr, /*headers_length=*/0,
+                           /*owns_header_buffer=*/false, params.ecn_codepoint)
             .Clone());
   }
 
@@ -103,7 +105,6 @@ class FirstFlightExtractor : public DelegatedPacketWriter::Delegate {
   DelegatedPacketWriter writer_;
   QuicConfig config_;
   std::unique_ptr<QuicCryptoClientConfig> crypto_config_;
-  QuicClientPushPromiseIndex push_promise_index_;
   QuicConnection* connection_;  // Owned by session_.
   std::unique_ptr<QuicSpdyClientSession> session_;
   std::vector<std::unique_ptr<QuicReceivedPacket>> packets_;

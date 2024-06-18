@@ -31,7 +31,7 @@
 #include "net/base/net_errors.h"
 #include "net/base/network_anonymization_key.h"
 #include "net/base/privacy_mode.h"
-#include "net/base/proxy_server.h"
+#include "net/base/proxy_chain.h"
 #include "net/base/proxy_string_util.h"
 #include "net/base/request_priority.h"
 #include "net/base/schemeful_site.h"
@@ -543,10 +543,10 @@ class TestConnectJobFactory : public ConnectJobFactory {
 
   std::unique_ptr<ConnectJob> CreateConnectJob(
       Endpoint endpoint,
-      const ProxyServer& proxy_server,
+      const ProxyChain& proxy_chain,
       const absl::optional<NetworkTrafficAnnotationTag>& proxy_annotation_tag,
       const SSLConfig* ssl_config_for_origin,
-      const SSLConfig* ssl_config_for_proxy,
+      const SSLConfig* base_ssl_configs_for_proxies,
       bool force_tunnel,
       PrivacyMode privacy_mode,
       const OnHostResolutionCallback& resolution_callback,
@@ -633,14 +633,14 @@ class ClientSocketPoolBaseTest : public TestWithTaskEnvironment {
       base::TimeDelta unused_idle_socket_timeout,
       base::TimeDelta used_idle_socket_timeout,
       bool enable_backup_connect_jobs = false,
-      ProxyServer proxy_server = ProxyServer::Direct()) {
+      ProxyChain proxy_chain = ProxyChain::Direct()) {
     DCHECK(!pool_.get());
     std::unique_ptr<TestConnectJobFactory> connect_job_factory =
         std::make_unique<TestConnectJobFactory>(&client_socket_factory_);
     connect_job_factory_ = connect_job_factory.get();
     pool_ = TransportClientSocketPool::CreateForTesting(
         max_sockets, max_sockets_per_group, unused_idle_socket_timeout,
-        used_idle_socket_timeout, proxy_server, /*is_for_websockets=*/false,
+        used_idle_socket_timeout, proxy_chain, /*is_for_websockets=*/false,
         &common_connect_job_params_, std::move(connect_job_factory),
         nullptr /* ssl_config_service */, enable_backup_connect_jobs);
   }
@@ -695,20 +695,21 @@ class ClientSocketPoolBaseTest : public TestWithTaskEnvironment {
   size_t completion_count() const { return test_base_.completion_count(); }
 
   const CommonConnectJobParams common_connect_job_params_{
-      nullptr /* client_socket_factory */,
-      nullptr /* host_resolver */,
-      nullptr /* http_auth_cache */,
-      nullptr /* http_auth_handler_factory */,
-      nullptr /* spdy_session_pool */,
-      nullptr /* quic_supported_versions */,
-      nullptr /* quic_stream_factory */,
-      nullptr /* proxy_delegate */,
-      nullptr /* http_user_agent_settings */,
-      nullptr /* ssl_client_context */,
-      nullptr /* socket_performance_watcher_factory */,
-      nullptr /* network_quality_estimator */,
+      /*client_socket_factory=*/nullptr,
+      /*host_resolver=*/nullptr,
+      /*http_auth_cache=*/nullptr,
+      /*http_auth_handler_factory=*/nullptr,
+      /*spdy_session_pool=*/nullptr,
+      /*quic_supported_versions=*/nullptr,
+      /*quic_stream_factory=*/nullptr,
+      /*proxy_delegate=*/nullptr,
+      /*http_user_agent_settings=*/nullptr,
+      /*ssl_client_context=*/nullptr,
+      /*socket_performance_watcher_factory=*/nullptr,
+      /*network_quality_estimator=*/nullptr,
       NetLog::Get(),
-      nullptr /* websocket_endpoint_lock_manager */};
+      /*websocket_endpoint_lock_manager=*/nullptr,
+      /*http_server_properties=*/nullptr};
   bool connect_backup_jobs_enabled_;
   MockClientSocketFactory client_socket_factory_;
   RecordingNetLogObserver net_log_observer_;
@@ -5708,7 +5709,7 @@ enum class RefreshType {
 };
 
 // Common base class to test RefreshGroup() when called from either
-// OnSSLConfigForServerChanged() matching a specific group or the pool's proxy.
+// OnSSLConfigForServersChanged() matching a specific group or the pool's proxy.
 //
 // Tests which test behavior specific to one or the other case should use
 // ClientSocketPoolBaseTest directly. In particular, there is no "other group"
@@ -5730,7 +5731,7 @@ class ClientSocketPoolBaseRefreshTest
             max_sockets, max_sockets_per_group, kUnusedIdleSocketTimeout,
             ClientSocketPool::used_idle_socket_timeout(),
             enable_backup_connect_jobs,
-            PacResultElementToProxyServer("HTTPS myproxy:70"));
+            PacResultElementToProxyChain("HTTPS myproxy:70"));
         break;
     }
   }
@@ -5750,13 +5751,13 @@ class ClientSocketPoolBaseRefreshTest
                        kNetworkAnonymizationKey);
   }
 
-  void OnSSLConfigForServerChanged() {
+  void OnSSLConfigForServersChanged() {
     switch (GetParam()) {
       case RefreshType::kServer:
-        pool_->OnSSLConfigForServerChanged(HostPortPair("a", 443));
+        pool_->OnSSLConfigForServersChanged({HostPortPair("a", 443)});
         break;
       case RefreshType::kProxy:
-        pool_->OnSSLConfigForServerChanged(HostPortPair("myproxy", 70));
+        pool_->OnSSLConfigForServersChanged({HostPortPair("myproxy", 70)});
         break;
     }
   }
@@ -5787,7 +5788,7 @@ TEST_P(ClientSocketPoolBaseRefreshTest, RefreshGroupCreatesNewConnectJobs) {
   // success.
   connect_job_factory_->set_job_type(TestConnectJob::kMockJob);
 
-  OnSSLConfigForServerChanged();
+  OnSSLConfigForServersChanged();
   EXPECT_EQ(OK, callback.WaitForResult());
   ASSERT_TRUE(handle.socket());
   EXPECT_EQ(0, pool_->IdleSocketCount());
@@ -5819,7 +5820,7 @@ TEST_P(ClientSocketPoolBaseRefreshTest, RefreshGroupClosesIdleConnectJobs) {
   EXPECT_EQ(2u, pool_->IdleSocketCountInGroup(kGroupId));
   EXPECT_EQ(2u, pool_->IdleSocketCountInGroup(kGroupIdInPartition));
 
-  OnSSLConfigForServerChanged();
+  OnSSLConfigForServersChanged();
   EXPECT_EQ(0, pool_->IdleSocketCount());
   EXPECT_FALSE(pool_->HasGroupForTesting(kGroupId));
   EXPECT_FALSE(pool_->HasGroupForTesting(kGroupIdInPartition));
@@ -5840,7 +5841,7 @@ TEST_F(ClientSocketPoolBaseTest,
   EXPECT_EQ(2, pool_->IdleSocketCount());
   EXPECT_EQ(2u, pool_->IdleSocketCountInGroup(kOtherGroupId));
 
-  pool_->OnSSLConfigForServerChanged(HostPortPair("a", 443));
+  pool_->OnSSLConfigForServersChanged({HostPortPair("a", 443)});
   ASSERT_TRUE(pool_->HasGroupForTesting(kOtherGroupId));
   EXPECT_EQ(2, pool_->IdleSocketCount());
   EXPECT_EQ(2u, pool_->IdleSocketCountInGroup(kOtherGroupId));
@@ -5861,7 +5862,7 @@ TEST_P(ClientSocketPoolBaseRefreshTest, RefreshGroupPreventsSocketReuse) {
   ASSERT_TRUE(pool_->HasGroupForTesting(kGroupId));
   EXPECT_EQ(1, pool_->NumActiveSocketsInGroupForTesting(kGroupId));
 
-  OnSSLConfigForServerChanged();
+  OnSSLConfigForServersChanged();
 
   handle.Reset();
   EXPECT_EQ(0, pool_->IdleSocketCount());
@@ -5887,7 +5888,7 @@ TEST_F(ClientSocketPoolBaseTest,
   ASSERT_TRUE(pool_->HasGroupForTesting(kOtherGroupId));
   EXPECT_EQ(1, pool_->NumActiveSocketsInGroupForTesting(kOtherGroupId));
 
-  pool_->OnSSLConfigForServerChanged(HostPortPair("a", 443));
+  pool_->OnSSLConfigForServersChanged({HostPortPair("a", 443)});
 
   handle.Reset();
   EXPECT_EQ(1, pool_->IdleSocketCount());
@@ -5910,7 +5911,7 @@ TEST_P(ClientSocketPoolBaseRefreshTest,
 
   // This should update the generation, but not cancel the old ConnectJob - it's
   // not safe to do anything while waiting on the original ConnectJob.
-  OnSSLConfigForServerChanged();
+  OnSSLConfigForServersChanged();
 
   // Providing auth credentials and restarting the request with them will cause
   // the ConnectJob to complete successfully, but the result will be discarded
@@ -5939,7 +5940,7 @@ TEST_F(ClientSocketPoolBaseTest, RefreshProxyRefreshesAllGroups) {
                              kUnusedIdleSocketTimeout,
                              ClientSocketPool::used_idle_socket_timeout(),
                              false /* no backup connect jobs */,
-                             PacResultElementToProxyServer("HTTPS myproxy:70"));
+                             PacResultElementToProxyChain("HTTPS myproxy:70"));
 
   const ClientSocketPool::GroupId kGroupId1 =
       TestGroupId("a", 443, url::kHttpsScheme);
@@ -5980,7 +5981,7 @@ TEST_F(ClientSocketPoolBaseTest, RefreshProxyRefreshesAllGroups) {
 
   // Changes to some other proxy do not affect the pool. The idle socket remains
   // alive and closing |handle2| makes the socket available for the pool.
-  pool_->OnSSLConfigForServerChanged(HostPortPair("someotherproxy", 70));
+  pool_->OnSSLConfigForServersChanged({HostPortPair("someotherproxy", 70)});
 
   ASSERT_TRUE(pool_->HasGroupForTesting(kGroupId1));
   EXPECT_EQ(1, pool_->NumActiveSocketsInGroupForTesting(kGroupId1));
@@ -5994,7 +5995,7 @@ TEST_F(ClientSocketPoolBaseTest, RefreshProxyRefreshesAllGroups) {
   EXPECT_EQ(1u, pool_->IdleSocketCountInGroup(kGroupId2));
 
   // Changes to the matching proxy refreshes all groups.
-  pool_->OnSSLConfigForServerChanged(HostPortPair("myproxy", 70));
+  pool_->OnSSLConfigForServersChanged({HostPortPair("myproxy", 70)});
 
   // Idle sockets are closed.
   EXPECT_EQ(0, pool_->IdleSocketCount());
@@ -6049,7 +6050,7 @@ TEST_F(ClientSocketPoolBaseTest, RefreshBothPrivacyAndNormalSockets) {
   ASSERT_TRUE(pool_->HasGroupForTesting(kOtherGroupId));
   EXPECT_EQ(1, pool_->NumActiveSocketsInGroupForTesting(kOtherGroupId));
 
-  pool_->OnSSLConfigForServerChanged(HostPortPair("a", 443));
+  pool_->OnSSLConfigForServersChanged({HostPortPair("a", 443)});
 
   // Active sockets continue to be active.
   ASSERT_TRUE(pool_->HasGroupForTesting(kGroupId));

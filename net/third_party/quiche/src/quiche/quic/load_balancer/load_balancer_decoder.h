@@ -5,6 +5,10 @@
 #ifndef QUICHE_QUIC_LOAD_BALANCER_LOAD_BALANCER_DECODER_H_
 #define QUICHE_QUIC_LOAD_BALANCER_LOAD_BALANCER_DECODER_H_
 
+#include <cstdint>
+
+#include "absl/types/optional.h"
+#include "quiche/quic/core/quic_connection_id.h"
 #include "quiche/quic/load_balancer/load_balancer_config.h"
 #include "quiche/quic/load_balancer/load_balancer_server_id.h"
 
@@ -29,7 +33,7 @@ class QUIC_EXPORT_PRIVATE LoadBalancerDecoder {
       return nullptr;
     }
 
-    return &config_[config_id].value();
+    return &*config_[config_id];
   }
 
   // Extract a server ID from |connection_id|. If there is no config for the

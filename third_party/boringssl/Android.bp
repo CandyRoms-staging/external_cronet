@@ -53,8 +53,8 @@ cc_defaults {
     min_sdk_version: "30",
     include_dirs: [
         "external/cronet/buildtools/third_party/libc++/",
-        "external/cronet/buildtools/third_party/libc++/trunk/include",
-        "external/cronet/buildtools/third_party/libc++abi/trunk/include",
+        "external/cronet/third_party/libc++/src/include",
+        "external/cronet/third_party/libc++abi/src/include",
     ],
 }
 

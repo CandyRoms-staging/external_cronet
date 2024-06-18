@@ -4,10 +4,13 @@
 
 #include "net/websockets/websocket_inflater.h"
 
+#include <string.h>
+
 #include <algorithm>
 #include <vector>
 #include <zlib.h>
 
+#include "base/check.h"
 #include "base/check_op.h"
 #include "net/base/io_buffer.h"
 

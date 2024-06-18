@@ -5,14 +5,12 @@
 package org.chromium.net;
 
 import android.net.Network;
-import org.chromium.net.CronetEngine;
-import org.chromium.net.UrlRequest;
 
+import org.jni_zero.JNINamespace;
+import org.jni_zero.NativeMethods;
 import org.json.JSONException;
 import org.json.JSONObject;
 
-import org.chromium.base.annotations.JNINamespace;
-import org.chromium.base.annotations.NativeMethods;
 import org.chromium.net.impl.CronetEngineBuilderImpl;
 import org.chromium.net.impl.CronetUrlRequest;
 import org.chromium.net.impl.CronetUrlRequestContext;
@@ -92,11 +90,11 @@ public class CronetTestUtil {
     }
 
     public static void setMockCertVerifierForTesting(
-             ExperimentalCronetEngine.Builder builder, long mockCertVerifier) {
+            ExperimentalCronetEngine.Builder builder, long mockCertVerifier) {
         getCronetEngineBuilderImpl(builder).setMockCertVerifierForTesting(mockCertVerifier);
     }
 
-    public static CronetEngineBuilderImpl getCronetEngineBuilderImpl(
+    static CronetEngineBuilderImpl getCronetEngineBuilderImpl(
             ExperimentalCronetEngine.Builder builder) {
         return (CronetEngineBuilderImpl) ((ExperimentalOptionsTranslatingCronetEngineBuilder)
                                                   builder.getBuilderDelegate())
@@ -120,6 +118,12 @@ public class CronetTestUtil {
         return CronetTestUtilJni.get().getTaggedBytes(expectedTag);
     }
 
+    public static void nativeFlushWritePropertiesForTesting(CronetEngine engine) {
+        CronetUrlRequestContext context = (CronetUrlRequestContext) engine;
+        CronetTestUtilJni.get().flushWritePropertiesForTesting(
+                context.getUrlRequestContextAdapter());
+    }
+
     @NativeMethods("cronet_tests")
     interface Natives {
         boolean canGetTaggedBytes();
@@ -128,5 +132,6 @@ public class CronetTestUtil {
         void prepareNetworkThread(long contextAdapter);
         void cleanupNetworkThread(long contextAdapter);
         boolean uRLRequestContextExistsForTesting(long contextAdapter, long networkHandle);
+        void flushWritePropertiesForTesting(long contextAdapter);
     }
 }

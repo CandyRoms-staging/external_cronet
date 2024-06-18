@@ -6,13 +6,16 @@ package org.chromium.net;
 
 import android.content.Context;
 
-import org.chromium.base.annotations.JNINamespace;
-import org.chromium.base.annotations.NativeMethods;
+import org.jni_zero.JNINamespace;
+import org.jni_zero.NativeMethods;
+
 import org.chromium.base.test.util.UrlUtils;
+import org.chromium.net.test.ServerCertificate;
 
 /**
- * Wrapper class to start an in-process native test server, and get URLs
- * needed to talk to it.
+ * Wrapper class to start an in-process native test server, and get URLs needed to talk to it.
+ *
+ * <p>NativeTestServer only supports HTTP/1.
  */
 @JNINamespace("cronet")
 public final class NativeTestServer {
@@ -22,7 +25,21 @@ public final class NativeTestServer {
     public static boolean startNativeTestServer(Context context) {
         TestFilesInstaller.installIfNeeded(context);
         return NativeTestServerJni.get().startNativeTestServer(
-                TestFilesInstaller.getInstalledPath(context), UrlUtils.getIsolatedTestRoot());
+                TestFilesInstaller.getInstalledPath(context),
+            UrlUtils.getIsolatedTestRoot(),
+            false, // useHttps
+            ServerCertificate.CERT_OK);
+    }
+
+    public static boolean startNativeTestServerWithHTTPS(
+        Context context, @ServerCertificate int serverCertificate) {
+        TestFilesInstaller.installIfNeeded(context);
+        return NativeTestServerJni.get()
+            .startNativeTestServer(
+                TestFilesInstaller.getInstalledPath(context),
+                UrlUtils.getIsolatedTestRoot(),
+                true, // useHttps
+                serverCertificate);
     }
 
     public static void shutdownNativeTestServer() {
@@ -91,7 +108,11 @@ public final class NativeTestServer {
 
     @NativeMethods("cronet_tests")
     interface Natives {
-        boolean startNativeTestServer(String filePath, String testDataDir);
+        boolean startNativeTestServer(
+                String filePath,
+                String testDataDir,
+                boolean useHttps,
+                @ServerCertificate int certificate);
         void shutdownNativeTestServer();
         String getEchoBodyURL();
         String getEchoHeaderURL(String header);

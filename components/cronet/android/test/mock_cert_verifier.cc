@@ -9,7 +9,7 @@
 #include "base/android/jni_array.h"
 #include "base/android/jni_string.h"
 #include "base/test/test_support_android.h"
-#include "components/cronet/android/cronet_tests_jni_headers/MockCertVerifier_jni.h"
+#include "components/cronet/android/cronet_test_apk_jni/MockCertVerifier_jni.h"
 #include "crypto/sha2.h"
 #include "net/base/net_errors.h"
 #include "net/cert/asn1_util.h"
@@ -62,7 +62,7 @@ static jlong JNI_MockCertVerifier_CreateMockCertVerifier(
   for (const auto& cert : certs) {
     net::CertVerifyResult verify_result;
     verify_result.verified_cert =
-        net::ImportCertFromFile(test_data_dir, cert);
+        net::ImportCertFromFile(net::GetTestCertsDirectory(), cert);
 
     // By default, HPKP verification is enabled for known trust roots only.
     verify_result.is_issued_by_known_root = jknown_root;

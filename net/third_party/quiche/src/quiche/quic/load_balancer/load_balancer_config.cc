@@ -4,10 +4,14 @@
 
 #include "quiche/quic/load_balancer/load_balancer_config.h"
 
-#include <memory>
-#include <string_view>
+#include <cstdint>
+#include <cstring>
 
+#include "absl/strings/string_view.h"
+#include "absl/types/optional.h"
+#include "absl/types/span.h"
 #include "openssl/aes.h"
+#include "quiche/quic/core/quic_connection_id.h"
 #include "quiche/quic/platform/api/quic_bug_tracker.h"
 
 namespace quic {
@@ -173,7 +177,7 @@ bool LoadBalancerConfig::BlockEncrypt(
   if (!key_.has_value()) {
     return false;
   }
-  AES_encrypt(plaintext, ciphertext, &key_.value());
+  AES_encrypt(plaintext, ciphertext, &*key_);
   return true;
 }
 
@@ -183,7 +187,7 @@ bool LoadBalancerConfig::BlockDecrypt(
   if (!block_decrypt_key_.has_value()) {
     return false;
   }
-  AES_decrypt(ciphertext, plaintext, &block_decrypt_key_.value());
+  AES_decrypt(ciphertext, plaintext, &*block_decrypt_key_);
   return true;
 }
 

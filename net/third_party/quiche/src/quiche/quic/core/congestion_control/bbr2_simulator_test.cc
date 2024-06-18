@@ -1593,6 +1593,12 @@ TEST_F(Bbr2DefaultTopologyTest, InFlightAwareGainCycling) {
                      sender_->ExportDebugState().bandwidth_hi, 0.02f);
   }
 
+  if (GetQuicReloadableFlag(quic_pacing_remove_non_initial_burst)) {
+    QuicSentPacketManagerPeer::GetPacingSender(
+        &sender_connection()->sent_packet_manager())
+        ->SetBurstTokens(10);
+  }
+
   // Now that in-flight is almost zero and the pacing gain is still above 1,
   // send approximately 1.4 BDPs worth of data. This should cause the PROBE_BW
   // mode to enter low gain cycle(PROBE_DOWN), and exit it earlier than one
@@ -2569,6 +2575,27 @@ TEST_F(Bbr2MultiSenderTest, QUIC_SLOW_TEST(Bbr2VsCubic)) {
       },
       3 * transfer_time);
   ASSERT_TRUE(simulator_result);
+}
+
+TEST(MinRttFilter, BadRttSample) {
+  auto time_in_seconds = [](int64_t seconds) {
+    return QuicTime::Zero() + QuicTime::Delta::FromSeconds(seconds);
+  };
+
+  MinRttFilter filter(QuicTime::Delta::FromMilliseconds(10),
+                      time_in_seconds(100));
+  ASSERT_EQ(filter.Get(), QuicTime::Delta::FromMilliseconds(10));
+
+  filter.Update(QuicTime::Delta::FromMilliseconds(-1), time_in_seconds(150));
+
+  EXPECT_EQ(filter.Get(), QuicTime::Delta::FromMilliseconds(10));
+  EXPECT_EQ(filter.GetTimestamp(), time_in_seconds(100));
+
+  filter.ForceUpdate(QuicTime::Delta::FromMilliseconds(-2),
+                     time_in_seconds(200));
+
+  EXPECT_EQ(filter.Get(), QuicTime::Delta::FromMilliseconds(10));
+  EXPECT_EQ(filter.GetTimestamp(), time_in_seconds(100));
 }
 
 }  // namespace test

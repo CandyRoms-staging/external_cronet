@@ -23,6 +23,7 @@
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
+#include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/simple_test_clock.h"
@@ -44,7 +45,6 @@
 #include "net/disk_cache/blockfile/backend_impl.h"
 #include "net/disk_cache/blockfile/entry_impl.h"
 #include "net/disk_cache/blockfile/experiments.h"
-#include "net/disk_cache/blockfile/histogram_macros.h"
 #include "net/disk_cache/blockfile/mapped_file.h"
 #include "net/disk_cache/cache_util.h"
 #include "net/disk_cache/disk_cache_test_base.h"
@@ -75,9 +75,6 @@ using testing::Field;
 
 #include <windows.h>
 #endif
-
-// Provide a BackendImpl object to macros from histogram_macros.h.
-#define CACHE_UMA_BACKEND_IMPL_OBJ backend_
 
 // TODO(crbug.com/949811): Fix memory leaks in tests and re-enable on LSAN.
 #ifdef LEAK_SANITIZER
@@ -3818,17 +3815,6 @@ TEST_F(DiskCacheTest, AutomaticMaxSize) {
   EXPECT_EQ(largest_size, disk_cache::PreferredCacheSize(largest_size * 10000));
 }
 
-// Tests that we can "migrate" a running instance from one experiment group to
-// another.
-TEST_F(DiskCacheBackendTest, Histograms) {
-  InitCache();
-  disk_cache::BackendImpl* backend_ = cache_impl_;  // Needed be the macro.
-
-  for (int i = 1; i < 3; i++) {
-    CACHE_UMA(HOURS, "FillupTime", i, 28);
-  }
-}
-
 // Make sure that we keep the total memory used by the internal buffers under
 // control.
 TEST_F(DiskCacheBackendTest, TotalBuffersSize1) {
@@ -5490,4 +5476,86 @@ TEST_F(DiskCacheBackendTest, BlockfileMigrateNewEviction21) {
   ASSERT_TRUE(CopyTestCache("good_2_1"));
   SetNewEviction();
   BackendValidateMigrated();
+}
+
+// Disabled on android since this test requires cache creator to create
+// blockfile caches, and we don't use them on Android anyway.
+#if !BUILDFLAG(IS_ANDROID)
+TEST_F(DiskCacheBackendTest, BlockfileEmptyIndex) {
+  // Regression case for https://crbug.com/1441330 --- blockfile DCHECKing
+  // on mmap error for files it uses.
+
+  // Create a cache.
+  TestBackendResultCompletionCallback cb;
+  disk_cache::BackendResult rv = disk_cache::CreateCacheBackend(
+      net::DISK_CACHE, net::CACHE_BACKEND_BLOCKFILE,
+      /*file_operations=*/nullptr, cache_path_, 0,
+      disk_cache::ResetHandling::kNeverReset, nullptr, cb.callback());
+  rv = cb.GetResult(std::move(rv));
+  ASSERT_THAT(rv.net_error, IsOk());
+  ASSERT_TRUE(rv.backend);
+  rv.backend.reset();
+
+  // Make sure it's done doing I/O stuff.
+  disk_cache::BackendImpl::FlushForTesting();
+
+  // Truncate the index to zero bytes.
+  base::File index(cache_path_.AppendASCII("index"),
+                   base::File::FLAG_OPEN | base::File::FLAG_WRITE);
+  ASSERT_TRUE(index.IsValid());
+  ASSERT_TRUE(index.SetLength(0));
+  index.Close();
+
+  // Open the backend again. Fails w/o error-recovery.
+  rv = disk_cache::CreateCacheBackend(
+      net::DISK_CACHE, net::CACHE_BACKEND_BLOCKFILE,
+      /*file_operations=*/nullptr, cache_path_, 0,
+      disk_cache::ResetHandling::kNeverReset, nullptr, cb.callback());
+  rv = cb.GetResult(std::move(rv));
+  EXPECT_EQ(rv.net_error, net::ERR_FAILED);
+  EXPECT_FALSE(rv.backend);
+
+  // Now try again with the "delete and start over on error" flag people
+  // normally use.
+  rv = disk_cache::CreateCacheBackend(
+      net::DISK_CACHE, net::CACHE_BACKEND_BLOCKFILE,
+      /*file_operations=*/nullptr, cache_path_, 0,
+      disk_cache::ResetHandling::kResetOnError, nullptr, cb.callback());
+  rv = cb.GetResult(std::move(rv));
+  ASSERT_THAT(rv.net_error, IsOk());
+  ASSERT_TRUE(rv.backend);
+}
+#endif
+
+// See https://crbug.com/1486958
+TEST_F(DiskCacheBackendTest, SimpleDoomIter) {
+  const int kEntries = 1000;
+
+  SetSimpleCacheMode();
+  // Note: this test relies on InitCache() making sure the index is ready.
+  InitCache();
+
+  // We create a whole bunch of entries so that deleting them will hopefully
+  // finish after the iteration, in order to reproduce timing for the bug.
+  for (int i = 0; i < kEntries; ++i) {
+    disk_cache::Entry* entry = nullptr;
+    ASSERT_THAT(CreateEntry(base::NumberToString(i), &entry), IsOk());
+    entry->Close();
+  }
+  RunUntilIdle();  // Make sure close completes.
+
+  auto iterator = cache_->CreateIterator();
+  base::RunLoop run_loop;
+
+  disk_cache::EntryResult result = iterator->OpenNextEntry(
+      base::BindLambdaForTesting([&](disk_cache::EntryResult result) {
+        ASSERT_EQ(result.net_error(), net::OK);
+        disk_cache::Entry* entry = result.ReleaseEntry();
+        entry->Doom();
+        entry->Close();
+        run_loop.Quit();
+      }));
+  ASSERT_EQ(result.net_error(), net::ERR_IO_PENDING);
+  cache_->DoomAllEntries(base::DoNothing());
+  run_loop.Run();
 }

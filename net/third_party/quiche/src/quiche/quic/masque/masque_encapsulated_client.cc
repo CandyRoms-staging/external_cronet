@@ -78,7 +78,8 @@ class MasquePacketWriter : public QuicPacketWriter {
   WriteResult WritePacket(const char* buffer, size_t buf_len,
                           const QuicIpAddress& /*self_address*/,
                           const QuicSocketAddress& peer_address,
-                          PerPacketOptions* /*options*/) override {
+                          PerPacketOptions* /*options*/,
+                          const QuicPacketWriterParams& /*params*/) override {
     QUICHE_DCHECK(peer_address.IsInitialized());
     QUIC_DVLOG(1) << "MasquePacketWriter trying to write " << buf_len
                   << " bytes to " << peer_address;
@@ -198,6 +199,8 @@ class MasquePacketWriter : public QuicPacketWriter {
   bool SupportsReleaseTime() const override { return false; }
 
   bool IsBatchMode() const override { return false; }
+
+  bool SupportsEcn() const override { return false; }
   QuicPacketBuffer GetNextWriteLocation(
       const QuicIpAddress& /*self_address*/,
       const QuicSocketAddress& /*peer_address*/) override {
@@ -250,7 +253,7 @@ std::unique_ptr<QuicSession> MasqueEncapsulatedClient::CreateQuicClientSession(
                   << connection->connection_id();
   return std::make_unique<MasqueEncapsulatedClientSession>(
       *config(), supported_versions, connection, server_id(), crypto_config(),
-      push_promise_index(), masque_client_->masque_client_session());
+      masque_client_->masque_client_session());
 }
 
 MasqueEncapsulatedClientSession*

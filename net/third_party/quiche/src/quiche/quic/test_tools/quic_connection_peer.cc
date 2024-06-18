@@ -30,12 +30,6 @@ void QuicConnectionPeer::SetLossAlgorithm(
 }
 
 // static
-void QuicConnectionPeer::PopulateStopWaitingFrame(
-    QuicConnection* connection, QuicStopWaitingFrame* stop_waiting) {
-  connection->PopulateStopWaitingFrame(stop_waiting);
-}
-
-// static
 QuicPacketCreator* QuicConnectionPeer::GetPacketCreator(
     QuicConnection* connection) {
   return &connection->packet_creator_;
@@ -57,23 +51,6 @@ QuicTime::Delta QuicConnectionPeer::GetNetworkTimeout(
 QuicTime::Delta QuicConnectionPeer::GetHandshakeTimeout(
     QuicConnection* connection) {
   return connection->idle_network_detector_.handshake_timeout_;
-}
-
-// static
-QuicTime::Delta QuicConnectionPeer::GetBandwidthUpdateTimeout(
-    QuicConnection* connection) {
-  return connection->idle_network_detector_.bandwidth_update_timeout_;
-}
-
-// static
-void QuicConnectionPeer::DisableBandwidthUpdate(QuicConnection* connection) {
-  if (connection->idle_network_detector_.bandwidth_update_timeout_
-          .IsInfinite()) {
-    return;
-  }
-  connection->idle_network_detector_.bandwidth_update_timeout_ =
-      QuicTime::Delta::Infinite();
-  connection->idle_network_detector_.SetAlarm();
 }
 
 // static
@@ -276,17 +253,6 @@ bool QuicConnectionPeer::HasRetransmittableFrames(QuicConnection* connection,
 }
 
 // static
-bool QuicConnectionPeer::GetNoStopWaitingFrames(QuicConnection* connection) {
-  return connection->no_stop_waiting_frames_;
-}
-
-// static
-void QuicConnectionPeer::SetNoStopWaitingFrames(QuicConnection* connection,
-                                                bool no_stop_waiting_frames) {
-  connection->no_stop_waiting_frames_ = no_stop_waiting_frames;
-}
-
-// static
 void QuicConnectionPeer::SetMaxTrackedPackets(
     QuicConnection* connection, QuicPacketCount max_tracked_packets) {
   connection->max_tracked_packets_ = max_tracked_packets;
@@ -295,11 +261,6 @@ void QuicConnectionPeer::SetMaxTrackedPackets(
 // static
 void QuicConnectionPeer::SetNegotiatedVersion(QuicConnection* connection) {
   connection->version_negotiated_ = true;
-  if (connection->perspective() == Perspective::IS_SERVER &&
-      !QuicFramerPeer::infer_packet_header_type_from_version(
-          &connection->framer_)) {
-    connection->framer_.InferPacketHeaderTypeFromVersion();
-  }
 }
 
 // static
@@ -621,7 +582,16 @@ bool QuicConnectionPeer::TestLastReceivedPacketInfoDefaults() {
 // static
 void QuicConnectionPeer::DisableEcnCodepointValidation(
     QuicConnection* connection) {
+  // disable_ecn_codepoint_validation_ doesn't work correctly if the flag
+  // isn't set; all tests that don't set the flag should hit this bug.
+  QUIC_BUG_IF(quic_bug_518619343_03, !GetQuicReloadableFlag(quic_send_ect1))
+      << "Test disables ECN validation without setting quic_send_ect1";
   connection->disable_ecn_codepoint_validation_ = true;
+}
+
+// static
+void QuicConnectionPeer::OnForwardProgressMade(QuicConnection* connection) {
+  connection->OnForwardProgressMade();
 }
 
 }  // namespace test

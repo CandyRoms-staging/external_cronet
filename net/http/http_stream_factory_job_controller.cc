@@ -14,9 +14,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/task/single_thread_task_runner.h"
-#include "base/trace_event/memory_usage_estimator.h"
 #include "base/values.h"
-#include "net/base/features.h"
 #include "net/base/host_mapping_rules.h"
 #include "net/base/load_flags.h"
 #include "net/base/net_errors.h"
@@ -27,16 +25,13 @@
 #include "net/http/bidirectional_stream_impl.h"
 #include "net/http/transport_security_state.h"
 #include "net/log/net_log.h"
-#include "net/log/net_log_capture_mode.h"
 #include "net/log/net_log_event_type.h"
-#include "net/log/net_log_source.h"
 #include "net/log/net_log_with_source.h"
 #include "net/proxy_resolution/proxy_resolution_request.h"
+#include "net/proxy_resolution/proxy_resolution_service.h"
 #include "net/spdy/spdy_session.h"
 #include "url/gurl.h"
 #include "url/scheme_host_port.h"
-#include "url/third_party/mozilla/url_parse.h"
-#include "url/url_canon.h"
 #include "url/url_constants.h"
 
 namespace net {
@@ -138,7 +133,7 @@ HttpStreamFactory::JobController::JobController(
     bool enable_alternative_services,
     bool delay_main_job_with_available_spdy_session,
     const SSLConfig& server_ssl_config,
-    const SSLConfig& proxy_ssl_config)
+    const SSLConfig& base_proxy_ssl_config)
     : factory_(factory),
       session_(session),
       job_factory_(job_factory),
@@ -151,7 +146,7 @@ HttpStreamFactory::JobController::JobController(
           delay_main_job_with_available_spdy_session),
       request_info_(request_info),
       server_ssl_config_(server_ssl_config),
-      proxy_ssl_config_(proxy_ssl_config),
+      base_proxy_ssl_config_(base_proxy_ssl_config),
       net_log_(NetLogWithSource::Make(
           session->net_log(),
           NetLogSourceType::HTTP_STREAM_JOB_CONTROLLER)) {
@@ -176,10 +171,10 @@ HttpStreamFactory::JobController::JobController(
 }
 
 HttpStreamFactory::JobController::~JobController() {
+  bound_job_ = nullptr;
   main_job_.reset();
   alternative_job_.reset();
   dns_alpn_h3_job_.reset();
-  bound_job_ = nullptr;
   if (proxy_resolve_request_) {
     DCHECK_EQ(STATE_RESOLVE_PROXY_COMPLETE, next_state_);
     proxy_resolve_request_.reset();
@@ -819,6 +814,8 @@ int HttpStreamFactory::JobController::DoCreateJobs() {
     DCHECK_NE(quic_version, quic::ParsedQuicVersion::Unsupported());
   }
   const bool dns_alpn_h3_job_enabled =
+      !HttpStreamFactory::Job::OriginToForceQuicOn(
+          *session_->context().quic_context->params(), destination) &&
       enable_alternative_services_ &&
       session_->params().use_dns_https_svcb_alpn &&
       base::EqualsCaseInsensitiveASCII(origin_url.scheme(),
@@ -841,7 +838,7 @@ int HttpStreamFactory::JobController::DoCreateJobs() {
     std::unique_ptr<Job> preconnect_job = job_factory_->CreateJob(
         this, dns_alpn_h3_job_enabled ? PRECONNECT_DNS_ALPN_H3 : PRECONNECT,
         session_, request_info_, IDLE, proxy_info_, server_ssl_config_,
-        proxy_ssl_config_, destination, origin_url, is_websocket_,
+        base_proxy_ssl_config_, destination, origin_url, is_websocket_,
         enable_ip_based_pooling_, net_log_.net_log());
     // When there is an valid alternative service info, and `preconnect_job`
     // has no existing QUIC session, create a job for the alternative service.
@@ -857,7 +854,7 @@ int HttpStreamFactory::JobController::DoCreateJobs() {
 
       main_job_ = job_factory_->CreateJob(
           this, PRECONNECT, session_, request_info_, IDLE, proxy_info_,
-          server_ssl_config_, proxy_ssl_config_,
+          server_ssl_config_, base_proxy_ssl_config_,
           std::move(alternative_destination), origin_url, is_websocket_,
           enable_ip_based_pooling_, session_->net_log(),
           alternative_service_info_.protocol(), quic_version);
@@ -867,7 +864,7 @@ int HttpStreamFactory::JobController::DoCreateJobs() {
       if (dns_alpn_h3_job_enabled) {
         preconnect_backup_job_ = job_factory_->CreateJob(
             this, PRECONNECT, session_, request_info_, IDLE, proxy_info_,
-            server_ssl_config_, proxy_ssl_config_, std::move(destination),
+            server_ssl_config_, base_proxy_ssl_config_, std::move(destination),
             origin_url, is_websocket_, enable_ip_based_pooling_,
             net_log_.net_log());
       }
@@ -877,8 +874,8 @@ int HttpStreamFactory::JobController::DoCreateJobs() {
   }
   main_job_ = job_factory_->CreateJob(
       this, MAIN, session_, request_info_, priority_, proxy_info_,
-      server_ssl_config_, proxy_ssl_config_, std::move(destination), origin_url,
-      is_websocket_, enable_ip_based_pooling_, net_log_.net_log());
+      server_ssl_config_, base_proxy_ssl_config_, std::move(destination),
+      origin_url, is_websocket_, enable_ip_based_pooling_, net_log_.net_log());
 
   // Alternative Service can only be set for HTTPS requests while Alternative
   // Proxy is set for HTTP requests.
@@ -904,7 +901,7 @@ int HttpStreamFactory::JobController::DoCreateJobs() {
 
     alternative_job_ = job_factory_->CreateJob(
         this, ALTERNATIVE, session_, request_info_, priority_, proxy_info_,
-        server_ssl_config_, proxy_ssl_config_,
+        server_ssl_config_, base_proxy_ssl_config_,
         std::move(alternative_destination), origin_url, is_websocket_,
         enable_ip_based_pooling_, net_log_.net_log(),
         alternative_service_info_.protocol(), quic_version);
@@ -916,7 +913,7 @@ int HttpStreamFactory::JobController::DoCreateJobs() {
         url::SchemeHostPort(origin_url);
     dns_alpn_h3_job_ = job_factory_->CreateJob(
         this, DNS_ALPN_H3, session_, request_info_, priority_, proxy_info_,
-        server_ssl_config_, proxy_ssl_config_,
+        server_ssl_config_, base_proxy_ssl_config_,
         std::move(dns_alpn_h3_destination), origin_url, is_websocket_,
         enable_ip_based_pooling_, net_log_.net_log());
   }

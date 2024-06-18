@@ -2,13 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// This file is included by modules that have host support but android/looper.h is not supported
-// on host. __REMOVED_IN needs to be defined in order for android/looper.h to be compiled.
-#ifndef __BIONIC__
-#define __REMOVED_IN(x) __attribute__((deprecated))
-#endif
 #include <android/looper.h>
-
 #include <stdarg.h>
 #include <string.h>
 
@@ -192,7 +186,7 @@ bool GetTestProviderPath(int key, base::FilePath* result) {
     case base::DIR_ANDROID_APP_DATA:
     case base::DIR_ASSETS:
     case base::DIR_SRC_TEST_DATA_ROOT:
-    case base::DIR_GEN_TEST_DATA_ROOT:
+    case base::DIR_OUT_TEST_DATA_ROOT:
       CHECK(g_test_data_dir != nullptr);
       *result = *g_test_data_dir;
       return true;
@@ -216,17 +210,14 @@ namespace base {
 
 void InitAndroidTestPaths(const FilePath& test_data_dir) {
   if (g_test_data_dir) {
-    if (test_data_dir == *g_test_data_dir) {
-      return;
-    }
-    LOG(INFO) << "Test data dir was " << *g_test_data_dir
-              << ", attempted change to " << test_data_dir;
+    CHECK(test_data_dir == *g_test_data_dir);
+    return;
   }
   g_test_data_dir = new FilePath(test_data_dir);
   InitPathProvider(DIR_ANDROID_APP_DATA);
   InitPathProvider(DIR_ASSETS);
   InitPathProvider(DIR_SRC_TEST_DATA_ROOT);
-  InitPathProvider(DIR_GEN_TEST_DATA_ROOT);
+  InitPathProvider(DIR_OUT_TEST_DATA_ROOT);
 }
 
 void InitAndroidTestMessageLoop() {

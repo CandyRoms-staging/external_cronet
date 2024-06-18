@@ -136,32 +136,6 @@ class BASE_EXPORT ProcessMetrics {
   // will result in a time delta of 2 seconds/per 1 wall-clock second.
   [[nodiscard]] TimeDelta GetCumulativeCPUUsage();
 
-#if BUILDFLAG(IS_WIN)
-  // TODO(pmonette): Remove the precise version of the CPU usage functions once
-  // we're validated that they are indeed better than the regular version above
-  // and that they can replace the old implementation.
-
-  // Returns the percentage of time spent executing, across all threads of the
-  // process, in the interval since the last time the method was called, using
-  // the current |cumulative_cpu|.
-  //
-  // Same as GetPlatformIndependentCPUUSage() but implemented using
-  // `QueryProcessCycleTime` for higher precision.
-  [[nodiscard]] double GetPreciseCPUUsage(TimeDelta cumulative_cpu);
-
-  // Same as the above, but automatically calls GetPreciseCumulativeCPUUsage()
-  // to determine the current cumulative CPU.
-  [[nodiscard]] double GetPreciseCPUUsage();
-
-  // Returns the cumulative CPU usage across all threads of the process since
-  // process start. In case of multi-core processors, a process can consume CPU
-  // at a rate higher than wall-clock time, e.g. two cores at full utilization
-  // will result in a time delta of 2 seconds/per 1 wall-clock second.
-  //
-  // This is implemented using `QueryProcessCycleTime` for higher precision.
-  [[nodiscard]] TimeDelta GetPreciseCumulativeCPUUsage();
-#endif  // BUILDFLAG(IS_WIN)
-
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID) || \
     BUILDFLAG(IS_AIX)
   // Emits the cumulative CPU usage for all currently active threads since they
@@ -196,10 +170,6 @@ class BASE_EXPORT ProcessMetrics {
   // measures such as placing DRAM in to self-refresh (also referred to as
   // auto-refresh), place interconnects into lower-power states etc"
   int GetPackageIdleWakeupsPerSecond();
-
-  // Returns "Energy Impact", a synthetic power estimation metric displayed by
-  // macOS in Activity Monitor and the battery menu.
-  int GetEnergyImpact();
 #endif
 
   // Retrieves accounting information for all I/O operations performed by the
@@ -252,6 +222,9 @@ class BASE_EXPORT ProcessMetrics {
   // See |GetPackageIdleWakeupsForSecond| comment for more info.
   int CalculatePackageIdleWakeupsPerSecond(
       uint64_t absolute_package_idle_wakeups);
+
+  // Queries the port provider if it's set.
+  mach_port_t TaskForPid(ProcessHandle process) const;
 #endif
 
 #if BUILDFLAG(IS_WIN)
@@ -267,11 +240,6 @@ class BASE_EXPORT ProcessMetrics {
   TimeDelta last_cumulative_cpu_;
 #endif
 
-#if BUILDFLAG(IS_WIN)
-  TimeTicks last_cpu_time_for_precise_cpu_usage_;
-  TimeDelta last_precise_cumulative_cpu_;
-#endif
-
 #if BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || \
     BUILDFLAG(IS_AIX)
   // Same thing for idle wakeups.
@@ -283,15 +251,13 @@ class BASE_EXPORT ProcessMetrics {
   // And same thing for package idle exit wakeups.
   TimeTicks last_package_idle_wakeups_time_;
   uint64_t last_absolute_package_idle_wakeups_;
-  double last_energy_impact_;
-  // In mach_absolute_time units.
-  uint64_t last_energy_impact_time_;
+
+  // Works around a race condition when combining two task_info() calls to
+  // measure CPU time.
+  TimeDelta last_measured_cpu_;
 #endif
 
 #if BUILDFLAG(IS_MAC)
-  // Queries the port provider if it's set.
-  mach_port_t TaskForPid(ProcessHandle process) const;
-
   raw_ptr<PortProvider> port_provider_;
 #endif  // BUILDFLAG(IS_MAC)
 };
@@ -628,9 +594,7 @@ BASE_EXPORT MachVMRegionResult GetBasicInfo(mach_port_t task,
                                             mach_vm_size_t* size,
                                             mach_vm_address_t* address,
                                             vm_region_basic_info_64* info);
-#endif  // BUILDFLAG(IS_APPLE)
 
-#if BUILDFLAG(IS_MAC)
 // Returns info on the first memory region at or after |address|, including
 // resident memory and share mode. On Success, |size| reflects the size of the
 // memory region.
@@ -641,7 +605,7 @@ BASE_EXPORT MachVMRegionResult GetTopInfo(mach_port_t task,
                                           mach_vm_size_t* size,
                                           mach_vm_address_t* address,
                                           vm_region_top_info_data_t* info);
-#endif  // BUILDFLAG(IS_MAC)
+#endif  // BUILDFLAG(IS_APPLE)
 
 }  // namespace base
 

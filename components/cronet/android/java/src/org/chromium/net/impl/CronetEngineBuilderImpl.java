@@ -410,7 +410,6 @@ public abstract class CronetEngineBuilderImpl extends ICronetEngineBuilder {
      * @param mockCertVerifier pointer to native MockCertVerifier.
      * @return the builder to facilitate chaining.
      */
-    @VisibleForTesting
     public CronetEngineBuilderImpl setMockCertVerifierForTesting(long mockCertVerifier) {
         mMockCertVerifier = mockCertVerifier;
         return this;

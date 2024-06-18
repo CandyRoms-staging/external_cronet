@@ -13,10 +13,8 @@
 #include "base/time/time.h"
 #include "net/base/host_port_pair.h"
 #include "net/base/net_errors.h"
-#include "net/base/privacy_mode.h"
 #include "net/http/http_stream_factory_job.h"
 #include "net/http/http_stream_request.h"
-#include "net/socket/next_proto.h"
 #include "net/spdy/spdy_session_pool.h"
 
 namespace net {
@@ -45,7 +43,7 @@ class HttpStreamFactory::JobController
                 bool enable_alternative_services,
                 bool delay_main_job_with_available_spdy_session,
                 const SSLConfig& server_ssl_config,
-                const SSLConfig& proxy_ssl_config);
+                const SSLConfig& base_proxy_ssl_config);
 
   ~JobController() override;
 
@@ -299,7 +297,8 @@ class HttpStreamFactory::JobController
   // |request_|.
   raw_ptr<HttpStreamRequest, DanglingUntriaged> request_ = nullptr;
 
-  const raw_ptr<HttpStreamRequest::Delegate, DanglingUntriaged> delegate_;
+  const raw_ptr<HttpStreamRequest::Delegate, AcrossTasksDanglingUntriaged>
+      delegate_;
 
   // True if this JobController is used to preconnect streams.
   const bool is_preconnect_;
@@ -365,14 +364,14 @@ class HttpStreamFactory::JobController
 
   // At the point where a Job is irrevocably tied to |request_|, we set this.
   // It will be nulled when the |request_| is finished.
-  raw_ptr<Job, DanglingUntriaged> bound_job_ = nullptr;
+  raw_ptr<Job> bound_job_ = nullptr;
 
   State next_state_ = STATE_RESOLVE_PROXY;
   std::unique_ptr<ProxyResolutionRequest> proxy_resolve_request_;
   const HttpRequestInfo request_info_;
   ProxyInfo proxy_info_;
   const SSLConfig server_ssl_config_;
-  const SSLConfig proxy_ssl_config_;
+  const SSLConfig base_proxy_ssl_config_;
   int num_streams_ = 0;
   HttpStreamRequest::StreamType stream_type_;
   RequestPriority priority_ = IDLE;

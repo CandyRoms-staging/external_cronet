@@ -312,13 +312,15 @@ class TestSession : public QuicSession {
     return stream;
   }
 
-  // QuicSession doesn't do anything in this method. So it's overridden here to
-  // test that the session handles pending streams correctly in terms of
+  // QuicSession doesn't do anything in these methods. So they are overridden
+  // here to test that the session handles pending streams correctly in terms of
   // receiving stream frames.
-  QuicStream* ProcessPendingStream(PendingStream* pending) override {
-    if (pending->is_bidirectional()) {
-      return CreateIncomingStream(pending);
-    }
+  QuicStream* ProcessBidirectionalPendingStream(
+      PendingStream* pending) override {
+    return CreateIncomingStream(pending);
+  }
+  QuicStream* ProcessReadUnidirectionalPendingStream(
+      PendingStream* pending) override {
     struct iovec iov;
     if (pending->sequencer()->GetReadableRegion(&iov)) {
       // Create TestStream once the first byte is received.
@@ -416,17 +418,8 @@ class TestSession : public QuicSession {
     }
   }
 
-  bool ShouldProcessPendingStreamImmediately() const override {
-    return process_pending_stream_immediately_;
-  }
-
   void set_uses_pending_streams(bool uses_pending_streams) {
     uses_pending_streams_ = uses_pending_streams;
-  }
-
-  void set_process_pending_stream_immediately(
-      bool process_pending_stream_immediately) {
-    process_pending_stream_immediately_ = process_pending_stream_immediately;
   }
 
   int num_incoming_streams_created() const {
@@ -445,10 +438,11 @@ class TestSession : public QuicSession {
 
   bool writev_consumes_all_data_;
   bool uses_pending_streams_;
-  bool process_pending_stream_immediately_ = true;
   QuicFrame save_frame_;
   int num_incoming_streams_created_;
 };
+
+MATCHER_P(IsFrame, type, "") { return arg.type == type; }
 
 class QuicSessionTestBase : public QuicTestWithParam<ParsedQuicVersion> {
  protected:
@@ -516,26 +510,27 @@ class QuicSessionTestBase : public QuicTestWithParam<ParsedQuicVersion> {
       if (QuicUtils::GetStreamType(
               id, session_.perspective(), session_.IsIncomingStream(id),
               connection_->version()) == READ_UNIDIRECTIONAL) {
-        // Verify STOP_SENDING but no RESET_STREAM is sent for
+        // Verify STOP_SENDING but no RST_STREAM is sent for
         // READ_UNIDIRECTIONAL streams.
-        EXPECT_CALL(*connection_, SendControlFrame(_))
+        EXPECT_CALL(*connection_, SendControlFrame(IsFrame(STOP_SENDING_FRAME)))
             .Times(1)
             .WillOnce(Invoke(&ClearControlFrame));
         EXPECT_CALL(*connection_, OnStreamReset(id, _)).Times(1);
       } else if (QuicUtils::GetStreamType(
                      id, session_.perspective(), session_.IsIncomingStream(id),
                      connection_->version()) == WRITE_UNIDIRECTIONAL) {
-        // Verify RESET_STREAM but not STOP_SENDING is sent for write-only
+        // Verify RST_STREAM but not STOP_SENDING is sent for write-only
         // stream.
-        EXPECT_CALL(*connection_, SendControlFrame(_))
+        EXPECT_CALL(*connection_, SendControlFrame(IsFrame(RST_STREAM_FRAME)))
             .Times(1)
             .WillOnce(Invoke(&ClearControlFrame));
         EXPECT_CALL(*connection_, OnStreamReset(id, _));
       } else {
-        // Verify RESET_STREAM and STOP_SENDING are sent for BIDIRECTIONAL
+        // Verify RST_STREAM and STOP_SENDING are sent for BIDIRECTIONAL
         // streams.
-        EXPECT_CALL(*connection_, SendControlFrame(_))
-            .Times(2)
+        EXPECT_CALL(*connection_, SendControlFrame(IsFrame(RST_STREAM_FRAME)))
+            .WillRepeatedly(Invoke(&ClearControlFrame));
+        EXPECT_CALL(*connection_, SendControlFrame(IsFrame(STOP_SENDING_FRAME)))
             .WillRepeatedly(Invoke(&ClearControlFrame));
         EXPECT_CALL(*connection_, OnStreamReset(id, _));
       }
@@ -1170,7 +1165,7 @@ TEST_P(QuicSessionTestServer, OnCanWriteBundlesStreams) {
 
   // Expect that we only send one packet, the writes from different streams
   // should be bundled together.
-  EXPECT_CALL(*writer, WritePacket(_, _, _, _, _))
+  EXPECT_CALL(*writer, WritePacket(_, _, _, _, _, _))
       .WillOnce(Return(WriteResult(WRITE_STATUS_OK, 0)));
   EXPECT_CALL(*send_algorithm, OnPacketSent(_, _, _, _, _));
   EXPECT_CALL(*send_algorithm, OnApplicationLimited(_));
@@ -1238,7 +1233,7 @@ TEST_P(QuicSessionTestServer, OnCanWriteWriterBlocks) {
   MockPacketWriter* writer = static_cast<MockPacketWriter*>(
       QuicConnectionPeer::GetWriter(session_.connection()));
   EXPECT_CALL(*writer, IsWriteBlocked()).WillRepeatedly(Return(true));
-  EXPECT_CALL(*writer, WritePacket(_, _, _, _, _)).Times(0);
+  EXPECT_CALL(*writer, WritePacket(_, _, _, _, _, _)).Times(0);
 
   TestStream* stream2 = session_.CreateOutgoingBidirectionalStream();
 
@@ -1285,6 +1280,74 @@ TEST_P(QuicSessionTestServer, SendStreamsBlocked) {
         return true;
       }));
   EXPECT_FALSE(session_.CanOpenNextOutgoingUnidirectionalStream());
+}
+
+TEST_P(QuicSessionTestServer, LimitMaxStreams) {
+  if (!VersionHasIetfQuicFrames(transport_version()) ||
+      !GetQuicReloadableFlag(quic_limit_sending_max_streams2)) {
+    return;
+  }
+  CompleteHandshake();
+
+  const QuicStreamId kMaxStreams = 4;
+  QuicSessionPeer::SetMaxOpenIncomingBidirectionalStreams(&session_,
+                                                          kMaxStreams);
+  EXPECT_EQ(kMaxStreams, QuicSessionPeer::ietf_streamid_manager(&session_)
+                             ->advertised_max_incoming_bidirectional_streams());
+
+  // Open and close the entire max streams window which will result
+  // in two MAX_STREAMS frames being sent.
+  std::vector<QuicMaxStreamsFrame> max_stream_frames;
+  EXPECT_CALL(*connection_, SendControlFrame(IsFrame(MAX_STREAMS_FRAME)))
+      .Times(2)
+      .WillRepeatedly(Invoke([&max_stream_frames](const QuicFrame& frame) {
+        max_stream_frames.push_back(frame.max_streams_frame);
+        ClearControlFrame(frame);
+        return true;
+      }));
+  for (size_t i = 0; i < kMaxStreams; ++i) {
+    QuicStreamId stream_id = GetNthClientInitiatedBidirectionalId(i);
+    QuicStreamFrame data1(stream_id, true, 0, absl::string_view("HT"));
+    session_.OnStreamFrame(data1);
+
+    CloseStream(stream_id);
+  }
+  EXPECT_EQ(2 * kMaxStreams,
+            QuicSessionPeer::ietf_streamid_manager(&session_)
+                ->advertised_max_incoming_bidirectional_streams());
+
+  // Opening and closing the next max streams window should NOT result
+  // in any MAX_STREAMS frames being sent.
+  for (size_t i = 0; i < kMaxStreams; ++i) {
+    QuicStreamId stream_id =
+        GetNthClientInitiatedBidirectionalId(i + kMaxStreams);
+    QuicStreamFrame data1(stream_id, true, 0, absl::string_view("HT"));
+    session_.OnStreamFrame(data1);
+
+    CloseStream(stream_id);
+  }
+
+  // Now when the outstanding MAX_STREAMS frame is ACK'd a new one will be sent.
+  EXPECT_CALL(*connection_, SendControlFrame(IsFrame(MAX_STREAMS_FRAME)))
+      .WillOnce(Invoke(&ClearControlFrame));
+  session_.OnFrameAcked(QuicFrame(max_stream_frames[0]),
+                        QuicTime::Delta::Zero(), QuicTime::Zero());
+  EXPECT_EQ(3 * kMaxStreams,
+            QuicSessionPeer::ietf_streamid_manager(&session_)
+                ->advertised_max_incoming_bidirectional_streams());
+
+  // Open (but do not close) all available streams to consume the full window.
+  for (size_t i = 0; i < kMaxStreams; ++i) {
+    QuicStreamId stream_id =
+        GetNthClientInitiatedBidirectionalId(i + 2 * kMaxStreams);
+    QuicStreamFrame data1(stream_id, true, 0, absl::string_view("HT"));
+    session_.OnStreamFrame(data1);
+  }
+
+  // When the remaining outstanding MAX_STREAMS frame is ACK'd no new one
+  // will be sent because the correct limit has already been advertised.
+  session_.OnFrameAcked(QuicFrame(max_stream_frames[1]),
+                        QuicTime::Delta::Zero(), QuicTime::Zero());
 }
 
 TEST_P(QuicSessionTestServer, BufferedHandshake) {
@@ -1415,7 +1478,7 @@ TEST_P(QuicSessionTestServer, SendGoAway) {
   connection_->SetDefaultEncryptionLevel(ENCRYPTION_FORWARD_SECURE);
   MockPacketWriter* writer = static_cast<MockPacketWriter*>(
       QuicConnectionPeer::GetWriter(session_.connection()));
-  EXPECT_CALL(*writer, WritePacket(_, _, _, _, _))
+  EXPECT_CALL(*writer, WritePacket(_, _, _, _, _, _))
       .WillOnce(Return(WriteResult(WRITE_STATUS_OK, 0)));
 
   EXPECT_CALL(*connection_, SendControlFrame(_))
@@ -1458,7 +1521,8 @@ TEST_P(QuicSessionTestServer, InvalidGoAway) {
 // Test that server session will send a connectivity probe in response to a
 // connectivity probe on the same path.
 TEST_P(QuicSessionTestServer, ServerReplyToConnectivityProbe) {
-  if (VersionHasIetfQuicFrames(transport_version())) {
+  if (VersionHasIetfQuicFrames(transport_version()) ||
+      GetQuicReloadableFlag(quic_ignore_gquic_probing)) {
     return;
   }
   connection_->SetDefaultEncryptionLevel(ENCRYPTION_FORWARD_SECURE);
@@ -1471,7 +1535,7 @@ TEST_P(QuicSessionTestServer, ServerReplyToConnectivityProbe) {
 
   MockPacketWriter* writer = static_cast<MockPacketWriter*>(
       QuicConnectionPeer::GetWriter(session_.connection()));
-  EXPECT_CALL(*writer, WritePacket(_, _, _, new_peer_address, _))
+  EXPECT_CALL(*writer, WritePacket(_, _, _, new_peer_address, _, _))
       .WillOnce(Return(WriteResult(WRITE_STATUS_OK, 0)));
 
   EXPECT_CALL(*connection_, SendConnectivityProbingPacket(_, _))
@@ -1831,8 +1895,8 @@ TEST_P(QuicSessionTestServer, PendingStreams) {
   if (!VersionUsesHttp3(transport_version())) {
     return;
   }
+  CompleteHandshake();
   session_.set_uses_pending_streams(true);
-  session_.set_process_pending_stream_immediately(true);
 
   QuicStreamId stream_id = QuicUtils::GetFirstUnidirectionalStreamId(
       transport_version(), Perspective::IS_CLIENT);
@@ -1852,7 +1916,6 @@ TEST_P(QuicSessionTestServer, BufferAllIncomingStreams) {
     return;
   }
   session_.set_uses_pending_streams(true);
-  session_.set_process_pending_stream_immediately(false);
 
   QuicStreamId stream_id = QuicUtils::GetFirstUnidirectionalStreamId(
       transport_version(), Perspective::IS_CLIENT);
@@ -1890,7 +1953,6 @@ TEST_P(QuicSessionTestServer, RstPendingStreams) {
     return;
   }
   session_.set_uses_pending_streams(true);
-  session_.set_process_pending_stream_immediately(false);
 
   QuicStreamId stream_id = QuicUtils::GetFirstUnidirectionalStreamId(
       transport_version(), Perspective::IS_CLIENT);
@@ -1935,23 +1997,32 @@ TEST_P(QuicSessionTestServer, RstPendingStreams) {
   EXPECT_EQ(0u, QuicSessionPeer::GetNumOpenDynamicStreams(&session_));
 }
 
-TEST_P(QuicSessionTestServer, OnFinPendingStreams) {
+TEST_P(QuicSessionTestServer, OnFinPendingStreamsReadUnidirectional) {
   if (!VersionUsesHttp3(transport_version())) {
     return;
   }
+  CompleteHandshake();
   session_.set_uses_pending_streams(true);
-  session_.set_process_pending_stream_immediately(true);
 
   QuicStreamId stream_id = QuicUtils::GetFirstUnidirectionalStreamId(
       transport_version(), Perspective::IS_CLIENT);
   QuicStreamFrame data(stream_id, true, 0, "");
   session_.OnStreamFrame(data);
 
+  // The pending stream will be immediately converted to a normal unidirectional
+  // stream, but because its FIN has been received, it should be closed
+  // immediately.
   EXPECT_FALSE(QuicSessionPeer::GetPendingStream(&session_, stream_id));
   EXPECT_EQ(0, session_.num_incoming_streams_created());
   EXPECT_EQ(0u, QuicSessionPeer::GetNumOpenDynamicStreams(&session_));
+  EXPECT_EQ(nullptr, QuicSessionPeer::GetStream(&session_, stream_id));
+}
 
-  session_.set_process_pending_stream_immediately(false);
+TEST_P(QuicSessionTestServer, OnFinPendingStreamsBidirectional) {
+  if (!VersionUsesHttp3(transport_version())) {
+    return;
+  }
+  session_.set_uses_pending_streams(true);
   // Bidirectional pending stream remains after Fin is received.
   // Bidirectional stream is buffered.
   QuicStreamId bidirectional_stream_id =
@@ -2001,7 +2072,6 @@ TEST_P(QuicSessionTestServer, BidirectionalPendingStreamOnWindowUpdate) {
   }
 
   session_.set_uses_pending_streams(true);
-  session_.set_process_pending_stream_immediately(false);
   QuicStreamId stream_id = QuicUtils::GetFirstBidirectionalStreamId(
       transport_version(), Perspective::IS_CLIENT);
   QuicStreamFrame data(stream_id, true, 10, absl::string_view("HT"));
@@ -2049,7 +2119,6 @@ TEST_P(QuicSessionTestServer, BidirectionalPendingStreamOnStopSending) {
   }
 
   session_.set_uses_pending_streams(true);
-  session_.set_process_pending_stream_immediately(false);
   QuicStreamId stream_id = QuicUtils::GetFirstBidirectionalStreamId(
       transport_version(), Perspective::IS_CLIENT);
   QuicStreamFrame data(stream_id, true, 0, absl::string_view("HT"));
@@ -2133,17 +2202,15 @@ TEST_P(QuicSessionTestClient, AvailableBidirectionalStreamsClient) {
 }
 
 TEST_P(QuicSessionTestClient, NewStreamCreationResumesMultiPortProbing) {
-  session_.config()->SetConnectionOptionsToSend({kRVCM});
+  if (!VersionHasIetfQuicFrames(transport_version())) {
+    return;
+  }
   session_.config()->SetClientConnectionOptions({kMPQC});
   session_.Initialize();
   connection_->CreateConnectionIdManager();
   connection_->SetDefaultEncryptionLevel(ENCRYPTION_FORWARD_SECURE);
   connection_->OnHandshakeComplete();
   session_.OnConfigNegotiated();
-
-  if (!connection_->connection_migration_use_new_cid()) {
-    return;
-  }
 
   EXPECT_CALL(*connection_, MaybeProbeMultiPortPath());
   session_.CreateOutgoingBidirectionalStream();
@@ -2925,7 +2992,7 @@ TEST_P(QuicSessionTestServer, OnStopSendingStaticStreams) {
   session_.OnStopSendingFrame(frame);
 }
 
-// If stream is write closed, do not send a RESET_STREAM frame.
+// If stream is write closed, do not send a RST_STREAM frame.
 TEST_P(QuicSessionTestServer, OnStopSendingForWriteClosedStream) {
   if (!VersionHasIetfQuicFrames(transport_version())) {
     return;
@@ -3123,7 +3190,7 @@ TEST_P(QuicSessionTestServer, BlockedFrameCausesWriteError) {
   CompleteHandshake();
   MockPacketWriter* writer = static_cast<MockPacketWriter*>(
       QuicConnectionPeer::GetWriter(session_.connection()));
-  EXPECT_CALL(*writer, WritePacket(_, _, _, _, _))
+  EXPECT_CALL(*writer, WritePacket(_, _, _, _, _, _))
       .WillOnce(Return(WriteResult(WRITE_STATUS_OK, 0)));
   // Set a small connection level flow control limit.
   const uint64_t kWindow = 36;

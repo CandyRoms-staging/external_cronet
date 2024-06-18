@@ -165,7 +165,7 @@ decltype(std::declval<F>()(std::declval<T>())) WithConstructed(
       std::forward<F>(f));
 }
 
-// Given arguments of an std::pair's consructor, PairArgs() returns a pair of
+// Given arguments of an std::pair's constructor, PairArgs() returns a pair of
 // tuples with references to the passed arguments. The tuples contain
 // constructor arguments for the first and the second elements of the pair.
 //
@@ -247,6 +247,14 @@ inline void SanitizerPoisonObject(const T* object) {
 template <typename T>
 inline void SanitizerUnpoisonObject(const T* object) {
   SanitizerUnpoisonMemoryRegion(object, sizeof(T));
+}
+
+template <typename Container, typename Alloc, typename F>
+void RunWithReentrancyGuard(Container& c, Alloc& a, F f) {
+  SanitizerPoisonObject(&c);
+  if (!std::is_empty<Alloc>()) SanitizerUnpoisonObject(&a);
+  f();
+  SanitizerUnpoisonObject(&c);
 }
 
 namespace memory_internal {

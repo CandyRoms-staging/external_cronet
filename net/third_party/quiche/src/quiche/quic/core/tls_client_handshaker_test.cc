@@ -368,6 +368,7 @@ TEST_P(TlsClientHandshakerTest, Resumption) {
   EXPECT_EQ(PROTOCOL_TLS1_3, stream()->handshake_protocol());
   EXPECT_TRUE(stream()->encryption_established());
   EXPECT_TRUE(stream()->one_rtt_keys_available());
+  EXPECT_FALSE(stream()->ResumptionAttempted());
   EXPECT_FALSE(stream()->IsResumption());
 
   // Create a second connection
@@ -377,6 +378,7 @@ TEST_P(TlsClientHandshakerTest, Resumption) {
   EXPECT_EQ(PROTOCOL_TLS1_3, stream()->handshake_protocol());
   EXPECT_TRUE(stream()->encryption_established());
   EXPECT_TRUE(stream()->one_rtt_keys_available());
+  EXPECT_TRUE(stream()->ResumptionAttempted());
   EXPECT_TRUE(stream()->IsResumption());
 }
 
@@ -390,6 +392,7 @@ TEST_P(TlsClientHandshakerTest, ResumptionRejection) {
   EXPECT_EQ(PROTOCOL_TLS1_3, stream()->handshake_protocol());
   EXPECT_TRUE(stream()->encryption_established());
   EXPECT_TRUE(stream()->one_rtt_keys_available());
+  EXPECT_FALSE(stream()->ResumptionAttempted());
   EXPECT_FALSE(stream()->IsResumption());
 
   // Create a second connection, but disable resumption on the server.
@@ -400,6 +403,7 @@ TEST_P(TlsClientHandshakerTest, ResumptionRejection) {
   EXPECT_EQ(PROTOCOL_TLS1_3, stream()->handshake_protocol());
   EXPECT_TRUE(stream()->encryption_established());
   EXPECT_TRUE(stream()->one_rtt_keys_available());
+  EXPECT_TRUE(stream()->ResumptionAttempted());
   EXPECT_FALSE(stream()->IsResumption());
   EXPECT_FALSE(stream()->EarlyDataAccepted());
   EXPECT_EQ(stream()->EarlyDataReason(),
@@ -857,6 +861,22 @@ TEST_P(TlsClientHandshakerTest, ECHGrease) {
   // Sending an ignored ECH GREASE extension does not count as negotiating ECH.
   EXPECT_FALSE(stream()->crypto_negotiated_params().encrypted_client_hello);
 }
+
+#if BORINGSSL_API_VERSION >= 22
+TEST_P(TlsClientHandshakerTest, EnableKyber) {
+  crypto_config_->set_preferred_groups({SSL_GROUP_X25519_KYBER768_DRAFT00});
+  server_crypto_config_->set_preferred_groups(
+      {SSL_GROUP_X25519_KYBER768_DRAFT00, SSL_GROUP_X25519, SSL_GROUP_SECP256R1,
+       SSL_GROUP_SECP384R1});
+  CreateConnection();
+
+  CompleteCryptoHandshake();
+  EXPECT_TRUE(stream()->encryption_established());
+  EXPECT_TRUE(stream()->one_rtt_keys_available());
+  EXPECT_EQ(SSL_GROUP_X25519_KYBER768_DRAFT00,
+            SSL_get_group_id(stream()->GetSsl()));
+}
+#endif  // BORINGSSL_API_VERSION
 
 }  // namespace
 }  // namespace test

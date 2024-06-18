@@ -26,6 +26,7 @@
 #include "net/disk_cache/simple/simple_synchronous_entry.h"
 #include "net/log/net_log_event_type.h"
 #include "net/log/net_log_with_source.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace base {
 class TaskRunner;
@@ -95,7 +96,7 @@ class NET_EXPORT_PRIVATE SimpleEntryImpl : public Entry,
   // CompletionOnceCallback.
   net::Error DoomEntry(CompletionOnceCallback callback);
 
-  const std::string& key() const { return key_; }
+  const absl::optional<std::string>& key() const { return key_; }
   uint64_t entry_hash() const { return entry_hash_; }
 
   // The key is not a constructor parameter to the SimpleEntryImpl, because
@@ -113,6 +114,7 @@ class NET_EXPORT_PRIVATE SimpleEntryImpl : public Entry,
   // From Entry:
   void Doom() override;
   void Close() override;
+  // This is only used as a public API, not internally.
   std::string GetKey() const override;
   // GetLastUsed() should not be called in net::APP_CACHE mode since the times
   // are not updated.
@@ -373,7 +375,7 @@ class NET_EXPORT_PRIVATE SimpleEntryImpl : public Entry,
   const base::FilePath path_;
   const uint64_t entry_hash_;
   const bool use_optimistic_operations_;
-  std::string key_;
+  absl::optional<std::string> key_;
 
   // |last_used_|, |last_modified_| and |data_size_| are copied from the
   // synchronous entry at the completion of each item of asynchronous IO.
@@ -419,7 +421,12 @@ class NET_EXPORT_PRIVATE SimpleEntryImpl : public Entry,
   // an operation is being executed no one owns the synchronous entry. Therefore
   // SimpleEntryImpl should not be deleted while an operation is running as that
   // would leak the SimpleSynchronousEntry.
-  raw_ptr<SimpleSynchronousEntry> synchronous_entry_ = nullptr;
+  // This dangling raw_ptr occurred in:
+  // content_unittests:
+  // GeneratedCodeCacheTest/GeneratedCodeCacheTest.StressVeryLargeEntries/1
+  // https://ci.chromium.org/ui/p/chromium/builders/try/linux-rel/1425125/test-results?q=ExactID%3Aninja%3A%2F%2Fcontent%2Ftest%3Acontent_unittests%2FGeneratedCodeCacheTest.StressVeryLargeEntries%2FGeneratedCodeCacheTest.1+VHash%3Ab3ba0803668e9981&sortby=&groupby=
+  raw_ptr<SimpleSynchronousEntry, FlakyDanglingUntriaged> synchronous_entry_ =
+      nullptr;
 
   scoped_refptr<net::PrioritizedTaskRunner> prioritized_task_runner_;
 
